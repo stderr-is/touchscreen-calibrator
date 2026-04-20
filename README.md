@@ -80,10 +80,20 @@ touchscreen-calibrator/
 
 ## Tested With
 
-- Linux Mint 21/22 (Cinnamon)
+- Linux Mint 21/22 (Cinnamon, XFCE)
 - iggual 82" touchscreen (Touch p403, USB)
 - VGA/HDMI projectors
 - libinput driver
+
+## Known Limitations
+
+**Edge dead zones**: If the projector projects a larger image than the physical touch frame (common with iggual 82" screens), the calibrated matrix will have unreachable zones at the screen edges (left/right typically ~5-8cm). The calibration script detects this and offers three options:
+
+1. Keep precise calibration (accurate everywhere the touch can reach)
+2. Compromise matrix (halves the dead zone, introduces small offset)
+3. Identity matrix (full edge reach, noticeable offset)
+
+The best fix is to physically adjust the projector's zoom so the image fits within the touch frame.
 
 ## License
 

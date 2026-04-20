@@ -222,41 +222,39 @@ compute_libinput_matrix() {
         warn "This calibration creates dead zones at the screen edges!"
         echo "  Left: ~${left_dead}% unreachable"
         echo "  Right: ~${right_dead}% unreachable"
-        echo "  This means you won't be able to tap the Start menu or screen corners."
         echo ""
         echo "  This usually means the projected image is slightly larger than the"
-        echo "  touch frame. You have two options:"
+        echo "  touch frame. Options:"
         echo ""
-        echo "  1) Shrink the projected image to fit the touch frame (recommended)"
-        echo "     Uses xrandr transform — accurate AND full edge coverage."
-        echo "     You'll see thin black bars at the image edges."
-        echo "  2) Use identity matrix (full edge touch but slight offset in center)"
-        echo "  3) Keep precise calibration (accurate center but edges unreachable)"
+        echo "  1) Keep precise calibration (accurate center, edges unreachable)"
+        echo "     Best if you mostly interact in the center of the screen."
+        echo "  2) Use compromise matrix (halve the dead zone, small center offset)"
+        echo "     Splits the error: edges lose ~half the dead zone, center gets"
+        echo "     a small offset (~2-4cm). Good middle ground."
+        echo "  3) Use identity matrix (full edge reach, noticeable center offset)"
+        echo "     Edges are fully reachable but touches may land ~5% off target."
+        echo ""
+        echo "  TIP: The best fix is to physically adjust the projector zoom/position"
+        echo "  so the image fits within the touch frame."
         echo ""
         read -rp "  Choose [1/2/3] (default: 1): " edge_answer
         case "${edge_answer}" in
             2)
+                # Compromise: average of calibrated matrix and identity
+                local comp_a comp_c comp_e comp_f
+                comp_a=$(echo "scale=4; ($MATRIX_A + 1) / 2" | bc)
+                comp_c=$(echo "scale=4; $MATRIX_C / 2" | bc)
+                comp_e=$(echo "scale=4; ($MATRIX_E + 1) / 2" | bc)
+                comp_f=$(echo "scale=4; $MATRIX_F / 2" | bc)
+                CALIB_MATRIX="$comp_a 0 $comp_c 0 $comp_e $comp_f 0 0 1"
+                ok "Using compromise matrix: $CALIB_MATRIX"
+                ;;
+            3)
                 CALIB_MATRIX="1 0 0 0 1 0 0 0 1"
                 ok "Using identity matrix for full edge-to-edge coverage."
                 ;;
-            3)
-                ok "Keeping precise calibration (edges will be unreachable)."
-                ;;
             *)
-                # Compute xrandr transform to shrink display into touch frame
-                local sx sy tx
-                sx=$(echo "scale=4; 1 / $MATRIX_A" | bc)
-                tx=$(echo "scale=2; -1 * $MATRIX_C * 1024 / $MATRIX_A" | bc 2>/dev/null || echo "0")
-                # Apply transform
-                XRANDR_TRANSFORM="${sx},0,${tx},0,1.0,0,0,0,1"
-                xrandr --output "$DISPLAY_OUTPUT" --transform "$XRANDR_TRANSFORM" 2>/dev/null || {
-                    warn "xrandr transform failed, falling back to identity matrix"
-                    CALIB_MATRIX="1 0 0 0 1 0 0 0 1"
-                }
-                if [ -n "$XRANDR_TRANSFORM" ]; then
-                    CALIB_MATRIX="1 0 0 0 1 0 0 0 1"
-                    ok "Display shrunk to fit touch frame. Using identity touch matrix."
-                fi
+                ok "Keeping precise calibration (edges will be unreachable)."
                 ;;
         esac
     fi
@@ -289,11 +287,8 @@ TOUCH_DEVICE="$TOUCH_DEVICE"
 DISPLAY_OUTPUT="$DISPLAY_OUTPUT"
 DRIVER="$DRIVER"
 CALIB_MATRIX="$CALIB_MATRIX"
-XRANDR_TRANSFORM="${XRANDR_TRANSFORM:-none}"
-MIN_X="$MIN_X"
-MAX_X="$MAX_X"
-MIN_Y="$MIN_Y"
-MAX_Y="$MAX_Y"
+# Original xinput_calibrator values (for reference):
+# MinX=$MIN_X MaxX=$MAX_X MinY=$MIN_Y MaxY=$MAX_Y
 EOF
     ok "Calibration data saved to: $data_file"
 }
@@ -314,23 +309,12 @@ sleep 2
 
 DEVICE="$TOUCH_DEVICE"
 OUTPUT="$DISPLAY_OUTPUT"
-EOF
+MATRIX="$CALIB_MATRIX"
 
-    # Add xrandr transform if needed
-    if [ -n "${XRANDR_TRANSFORM:-}" ] && [ "$XRANDR_TRANSFORM" != "none" ]; then
-        cat >> "$apply_script" << EOF
-
-# Shrink projected image to fit within touch frame
-xrandr --output "\$OUTPUT" --transform $XRANDR_TRANSFORM 2>/dev/null || true
-EOF
-    fi
-
-    cat >> "$apply_script" << EOF
-
-# Map touch to output and apply calibration
+# Map touch to output and apply calibration matrix
 xinput map-to-output "\$DEVICE" "\$OUTPUT" 2>/dev/null || true
-xinput set-prop "\$DEVICE" "libinput Calibration Matrix" $CALIB_MATRIX 2>/dev/null || \\
-xinput set-prop "\$DEVICE" "Coordinate Transformation Matrix" $CALIB_MATRIX 2>/dev/null || true
+xinput set-prop "\$DEVICE" "libinput Calibration Matrix" \$MATRIX 2>/dev/null || \\
+xinput set-prop "\$DEVICE" "Coordinate Transformation Matrix" \$MATRIX 2>/dev/null || true
 EOF
     chmod +x "$apply_script"
 
@@ -362,11 +346,6 @@ cmd_apply() {
     source "$data_file"
     TOUCH_ID=$(xinput list | grep "$TOUCH_DEVICE" | grep -v "Mouse\|Keyboard" | head -1 | sed -n 's/.*id=\([0-9]*\).*/\1/p')
 
-    # Apply xrandr transform if configured
-    if [ -n "${XRANDR_TRANSFORM:-}" ] && [ "$XRANDR_TRANSFORM" != "none" ]; then
-        xrandr --output "$DISPLAY_OUTPUT" --transform "$XRANDR_TRANSFORM" 2>/dev/null || true
-    fi
-
     apply_calibration
 }
 
@@ -374,16 +353,6 @@ cmd_apply() {
 
 cmd_remove() {
     info "Removing touchscreen calibration..."
-
-    # Reset xrandr transform
-    local data_file="$SCRIPT_DIR/calibrations/$(hostname).conf"
-    if [ -f "$data_file" ]; then
-        source "$data_file"
-        if [ -n "${XRANDR_TRANSFORM:-}" ] && [ "$XRANDR_TRANSFORM" != "none" ]; then
-            xrandr --output "$DISPLAY_OUTPUT" --transform none 2>/dev/null || true
-            ok "Reset display transform."
-        fi
-    fi
 
     rm -f "$AUTOSTART_DIR/touchscreen-calibration.desktop" && \
         ok "Removed autostart entry."
