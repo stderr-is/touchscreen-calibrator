@@ -227,15 +227,38 @@ compute_libinput_matrix() {
         echo "  This usually means the projected image is slightly larger than the"
         echo "  touch frame. You have two options:"
         echo ""
-        echo "  1) Use identity matrix (full edge-to-edge touch, may have slight"
-        echo "     offset in center — usually fine for interactive whiteboards)"
-        echo "  2) Keep precise calibration (accurate center, but edges unreachable)"
+        echo "  1) Shrink the projected image to fit the touch frame (recommended)"
+        echo "     Uses xrandr transform — accurate AND full edge coverage."
+        echo "     You'll see thin black bars at the image edges."
+        echo "  2) Use identity matrix (full edge touch but slight offset in center)"
+        echo "  3) Keep precise calibration (accurate center but edges unreachable)"
         echo ""
-        read -rp "  Use identity for full edge coverage? [Y/n]: " edge_answer
-        if [[ "${edge_answer,,}" != "n" ]]; then
-            CALIB_MATRIX="1 0 0 0 1 0 0 0 1"
-            ok "Using identity matrix for full edge-to-edge coverage."
-        fi
+        read -rp "  Choose [1/2/3] (default: 1): " edge_answer
+        case "${edge_answer}" in
+            2)
+                CALIB_MATRIX="1 0 0 0 1 0 0 0 1"
+                ok "Using identity matrix for full edge-to-edge coverage."
+                ;;
+            3)
+                ok "Keeping precise calibration (edges will be unreachable)."
+                ;;
+            *)
+                # Compute xrandr transform to shrink display into touch frame
+                local sx sy tx
+                sx=$(echo "scale=4; 1 / $MATRIX_A" | bc)
+                tx=$(echo "scale=2; -1 * $MATRIX_C * 1024 / $MATRIX_A" | bc 2>/dev/null || echo "0")
+                # Apply transform
+                XRANDR_TRANSFORM="${sx},0,${tx},0,1.0,0,0,0,1"
+                xrandr --output "$DISPLAY_OUTPUT" --transform "$XRANDR_TRANSFORM" 2>/dev/null || {
+                    warn "xrandr transform failed, falling back to identity matrix"
+                    CALIB_MATRIX="1 0 0 0 1 0 0 0 1"
+                }
+                if [ -n "$XRANDR_TRANSFORM" ]; then
+                    CALIB_MATRIX="1 0 0 0 1 0 0 0 1"
+                    ok "Display shrunk to fit touch frame. Using identity touch matrix."
+                fi
+                ;;
+        esac
     fi
 }
 
@@ -266,6 +289,7 @@ TOUCH_DEVICE="$TOUCH_DEVICE"
 DISPLAY_OUTPUT="$DISPLAY_OUTPUT"
 DRIVER="$DRIVER"
 CALIB_MATRIX="$CALIB_MATRIX"
+XRANDR_TRANSFORM="${XRANDR_TRANSFORM:-none}"
 MIN_X="$MIN_X"
 MAX_X="$MAX_X"
 MIN_Y="$MIN_Y"
@@ -287,8 +311,24 @@ install_persistent() {
 # Auto-generated: apply touchscreen calibration for $(hostname)
 # Device: $TOUCH_DEVICE → $DISPLAY_OUTPUT
 sleep 2
+
 DEVICE="$TOUCH_DEVICE"
-xinput map-to-output "\$DEVICE" "$DISPLAY_OUTPUT" 2>/dev/null || true
+OUTPUT="$DISPLAY_OUTPUT"
+EOF
+
+    # Add xrandr transform if needed
+    if [ -n "${XRANDR_TRANSFORM:-}" ] && [ "$XRANDR_TRANSFORM" != "none" ]; then
+        cat >> "$apply_script" << EOF
+
+# Shrink projected image to fit within touch frame
+xrandr --output "\$OUTPUT" --transform $XRANDR_TRANSFORM 2>/dev/null || true
+EOF
+    fi
+
+    cat >> "$apply_script" << EOF
+
+# Map touch to output and apply calibration
+xinput map-to-output "\$DEVICE" "\$OUTPUT" 2>/dev/null || true
 xinput set-prop "\$DEVICE" "libinput Calibration Matrix" $CALIB_MATRIX 2>/dev/null || \\
 xinput set-prop "\$DEVICE" "Coordinate Transformation Matrix" $CALIB_MATRIX 2>/dev/null || true
 EOF
@@ -321,6 +361,12 @@ cmd_apply() {
     fi
     source "$data_file"
     TOUCH_ID=$(xinput list | grep "$TOUCH_DEVICE" | grep -v "Mouse\|Keyboard" | head -1 | sed -n 's/.*id=\([0-9]*\).*/\1/p')
+
+    # Apply xrandr transform if configured
+    if [ -n "${XRANDR_TRANSFORM:-}" ] && [ "$XRANDR_TRANSFORM" != "none" ]; then
+        xrandr --output "$DISPLAY_OUTPUT" --transform "$XRANDR_TRANSFORM" 2>/dev/null || true
+    fi
+
     apply_calibration
 }
 
@@ -328,6 +374,16 @@ cmd_apply() {
 
 cmd_remove() {
     info "Removing touchscreen calibration..."
+
+    # Reset xrandr transform
+    local data_file="$SCRIPT_DIR/calibrations/$(hostname).conf"
+    if [ -f "$data_file" ]; then
+        source "$data_file"
+        if [ -n "${XRANDR_TRANSFORM:-}" ] && [ "$XRANDR_TRANSFORM" != "none" ]; then
+            xrandr --output "$DISPLAY_OUTPUT" --transform none 2>/dev/null || true
+            ok "Reset display transform."
+        fi
+    fi
 
     rm -f "$AUTOSTART_DIR/touchscreen-calibration.desktop" && \
         ok "Removed autostart entry."
