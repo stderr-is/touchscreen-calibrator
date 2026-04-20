@@ -11,8 +11,6 @@
 
 set -euo pipefail
 
-CONF_DIR="/etc/X11/xorg.conf.d"
-CONF_FILE="99-touchscreen-calibration.conf"
 AUTOSTART_DIR="$HOME/.config/autostart"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -258,7 +256,7 @@ xinput set-prop "\$DEVICE" "Coordinate Transformation Matrix" $CALIB_MATRIX 2>/d
 EOF
     chmod +x "$apply_script"
 
-    # 2. Autostart entry (works without root)
+    # 2. Autostart entry (no root needed, safe, proven to work)
     mkdir -p "$AUTOSTART_DIR"
     cat > "$AUTOSTART_DIR/touchscreen-calibration.desktop" << EOF
 [Desktop Entry]
@@ -272,53 +270,7 @@ X-GNOME-Autostart-enabled=true
 X-MATE-Autostart-enabled=true
 X-Cinnamon-Autostart-enabled=true
 EOF
-    ok "Autostart entry installed (works on next login)."
-
-    # 3. xorg.conf.d (needs root, most reliable)
-    local xorg_conf="/tmp/$CONF_FILE"
-    if [ "$DRIVER" = "libinput" ]; then
-        cat > "$xorg_conf" << EOF
-Section "InputClass"
-	Identifier	"touchscreen calibration ($(hostname))"
-	MatchProduct	"$TOUCH_DEVICE"
-	Driver		"libinput"
-	Option		"CalibrationMatrix"	"$CALIB_MATRIX"
-EndSection
-EOF
-    else
-        cat > "$xorg_conf" << EOF
-Section "InputClass"
-	Identifier	"touchscreen calibration ($(hostname))"
-	MatchProduct	"$TOUCH_DEVICE"
-	Option	"MinX"	"$MIN_X"
-	Option	"MaxX"	"$MAX_X"
-	Option	"MinY"	"$MIN_Y"
-	Option	"MaxY"	"$MAX_Y"
-	Option	"SwapXY"	"0"
-	Option	"InvertX"	"0"
-	Option	"InvertY"	"0"
-EndSection
-EOF
-    fi
-
-    echo ""
-    info "Installing X11 config (requires authentication)..."
-    if sudo -n true 2>/dev/null; then
-        sudo mkdir -p "$CONF_DIR"
-        sudo cp "$xorg_conf" "$CONF_DIR/$CONF_FILE"
-        sudo chmod 644 "$CONF_DIR/$CONF_FILE"
-        ok "Installed: $CONF_DIR/$CONF_FILE"
-    elif command -v pkexec &>/dev/null; then
-        pkexec bash -c "mkdir -p '$CONF_DIR' && cp '$xorg_conf' '$CONF_DIR/$CONF_FILE' && chmod 644 '$CONF_DIR/$CONF_FILE'" && \
-            ok "Installed: $CONF_DIR/$CONF_FILE" || \
-            warn "Could not install xorg.conf.d config. Run manually:\n  sudo cp $xorg_conf $CONF_DIR/$CONF_FILE"
-    else
-        warn "No root access. Install manually:"
-        echo "  sudo mkdir -p $CONF_DIR"
-        echo "  sudo cp $xorg_conf $CONF_DIR/$CONF_FILE"
-    fi
-
-    rm -f "$xorg_conf"
+    ok "Autostart entry installed (applies on every login, no root needed)."
 }
 
 # ─── Re-apply saved calibration ──────────────────────────────────────────────
@@ -342,18 +294,11 @@ cmd_remove() {
     rm -f "$AUTOSTART_DIR/touchscreen-calibration.desktop" && \
         ok "Removed autostart entry."
 
-    if [ -f "$CONF_DIR/$CONF_FILE" ]; then
-        if sudo -n true 2>/dev/null; then
-            sudo rm -f "$CONF_DIR/$CONF_FILE"
-        elif command -v pkexec &>/dev/null; then
-            pkexec rm -f "$CONF_DIR/$CONF_FILE"
-        else
-            warn "Remove manually: sudo rm $CONF_DIR/$CONF_FILE"
-        fi
-        ok "Removed xorg.conf.d config."
-    fi
+    local apply_script="$SCRIPT_DIR/apply-calibration.sh"
+    rm -f "$apply_script" && \
+        ok "Removed apply script."
 
-    ok "Calibration removed. Reboot to reset to defaults."
+    ok "Calibration removed. Log out and back in (or reboot) to reset."
 }
 
 # ─── Main ────────────────────────────────────────────────────────────────────

@@ -37,9 +37,9 @@ That's it. The script will:
 1. **Detection** — finds touchscreen via `xinput` and display via `xrandr`
 2. **Calibration** — runs `xinput_calibrator` to get raw min/max values
 3. **Conversion** — converts the evdev-style values into a libinput CalibrationMatrix (most touchscreens on modern distros use the libinput driver)
-4. **Persistence** — installs the calibration in two ways:
-   - `~/.config/autostart/` entry (no root needed, applies on login)
-   - `/etc/X11/xorg.conf.d/99-touchscreen-calibration.conf` (root needed, applies at X startup)
+4. **Persistence** — installs an autostart entry in `~/.config/autostart/` that re-applies calibration on every login. No root/sudo needed, no risk of breaking X.
+
+> **Note:** We intentionally avoid writing to `/etc/X11/xorg.conf.d/`. While that method *seems* more robust, bad calibration values there can **prevent X from starting**, leaving non-technical users stuck in a TTY console. The autostart approach is equally reliable and completely safe.
 
 ## Multi-Machine Setup
 
@@ -63,8 +63,9 @@ If all machines have identical hardware/projectors and the same screen alignment
 - Some touchscreens need drivers — check `dmesg | grep -i touch`
 
 ### Calibration works now but resets after reboot
-- Run `./calibrate.sh` again and authenticate when prompted (for the xorg.conf.d install)
-- Or manually: `sudo cp calibrations/$(hostname).conf.xorg /etc/X11/xorg.conf.d/99-touchscreen-calibration.conf`
+- Make sure you ran the full `./calibrate.sh` (not just `xinput_calibrator` by itself)
+- Check that the autostart file exists: `ls ~/.config/autostart/touchscreen-calibration.desktop`
+- Check that the apply script exists and is executable: `ls -la` the path shown in the autostart file
 
 ## Project Structure
 
