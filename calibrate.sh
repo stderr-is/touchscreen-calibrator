@@ -199,6 +199,44 @@ compute_libinput_matrix() {
 
     CALIB_MATRIX="$MATRIX_A 0 $MATRIX_C 0 $MATRIX_E $MATRIX_F 0 0 1"
     info "Libinput calibration matrix: $CALIB_MATRIX"
+
+    # Check if matrix creates significant dead zones at edges
+    # If the touch range doesn't cover the full screen, warn the user
+    local left_dead=$(echo "$MATRIX_C * 100" | bc | cut -d. -f1)
+    local right_alive=$(echo "($MATRIX_A + $MATRIX_C) * 100" | bc | cut -d. -f1)
+    local right_dead=$((100 - right_alive))
+    local top_dead=$(echo "$MATRIX_F * 100" | bc | cut -d. -f1)
+    # Handle negative top_dead (means touch extends beyond screen top — no dead zone)
+    if [ "${top_dead:0:1}" = "-" ]; then top_dead=0; fi
+    local bottom_alive=$(echo "($MATRIX_E + $MATRIX_F) * 100" | bc | cut -d. -f1)
+    local bottom_dead=$((100 - bottom_alive))
+    if [ "$bottom_dead" -lt 0 ]; then bottom_dead=0; fi
+
+    local max_dead=$left_dead
+    [ "$right_dead" -gt "$max_dead" ] 2>/dev/null && max_dead=$right_dead
+    [ "$top_dead" -gt "$max_dead" ] 2>/dev/null && max_dead=$top_dead
+    [ "$bottom_dead" -gt "$max_dead" ] 2>/dev/null && max_dead=$bottom_dead
+
+    if [ "${max_dead:-0}" -gt 3 ]; then
+        echo ""
+        warn "This calibration creates dead zones at the screen edges!"
+        echo "  Left: ~${left_dead}% unreachable"
+        echo "  Right: ~${right_dead}% unreachable"
+        echo "  This means you won't be able to tap the Start menu or screen corners."
+        echo ""
+        echo "  This usually means the projected image is slightly larger than the"
+        echo "  touch frame. You have two options:"
+        echo ""
+        echo "  1) Use identity matrix (full edge-to-edge touch, may have slight"
+        echo "     offset in center — usually fine for interactive whiteboards)"
+        echo "  2) Keep precise calibration (accurate center, but edges unreachable)"
+        echo ""
+        read -rp "  Use identity for full edge coverage? [Y/n]: " edge_answer
+        if [[ "${edge_answer,,}" != "n" ]]; then
+            CALIB_MATRIX="1 0 0 0 1 0 0 0 1"
+            ok "Using identity matrix for full edge-to-edge coverage."
+        fi
+    fi
 }
 
 # ─── Apply calibration ───────────────────────────────────────────────────────
